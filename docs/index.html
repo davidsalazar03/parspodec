@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="pt">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sensor de Distância</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --fg:#1b1f24; --muted:#6b7280; --accent:#2563eb; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0f1115; --card:#181b21; --fg:#e8eaed; --muted:#9aa0a6; --accent:#60a5fa; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:24px 16px; background:var(--bg); color:var(--fg);
+         font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+  main { max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 1.2rem; margin: 0 0 16px; color: var(--muted); font-weight: 600; }
+  .card { background:var(--card); border-radius:12px; padding:20px; margin-bottom:16px;
+          box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  #now { font-size: 3rem; font-weight: 700; color: var(--accent); line-height: 1; }
+  #ts, #status { color: var(--muted); font-size: .9rem; margin-top: 8px; }
+  .chart-wrap { position: relative; height: 320px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Sensor de distância (HC-SR04)</h1>
+  <div class="card">
+    <div id="now">—</div>
+    <div id="ts">A carregar…</div>
+    <div id="status"></div>
+  </div>
+  <div class="card"><div class="chart-wrap"><canvas id="chart"></canvas></div></div>
+</main>
+
+<script>
+// ---- EDITAR ----
+const SUPABASE_URL = "https://fdhtxpfzvzvnziuorpau.supabase.co";
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZkaHR4cGZ6dnp2bnppdW9ycGF1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI3MDUxNDQsImV4cCI6MjEwODI4MTE0NH0.y4VEuzERB8VGB-rCWbaK3LIuYo34rq3tt_tn0IswjHA";  // é pública por design; a RLS protege a tabela
+// ----------------
+const MAX_POINTS = 200;
+
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+const chart = new Chart(document.getElementById("chart"), {
+  type: "line",
+  data: { labels: [], datasets: [{ label: "Distância (cm)", data: [],
+          borderColor: "#2563eb", pointRadius: 0, tension: 0.2 }] },
+  options: { animation: false, maintainAspectRatio: false,
+             scales: { y: { beginAtZero: true } } }
+});
+
+function addPoint(row) {
+  const t = new Date(row.created_at);
+  chart.data.labels.push(t.toLocaleTimeString("pt-PT"));
+  chart.data.datasets[0].data.push(row.distance_cm);
+  if (chart.data.labels.length > MAX_POINTS) {
+    chart.data.labels.shift();
+    chart.data.datasets[0].data.shift();
+  }
+  document.getElementById("now").textContent = row.distance_cm.toFixed(1) + " cm";
+  document.getElementById("ts").textContent = "Última leitura: " + t.toLocaleString("pt-PT");
+}
+
+async function init() {
+  const { data, error } = await sb.from("readings")
+    .select("distance_cm, created_at")
+    .order("created_at", { ascending: false })
+    .limit(MAX_POINTS);
+
+  if (error) {
+    document.getElementById("ts").textContent = "Erro: " + error.message;
+    return;
+  }
+  if (data.length === 0) document.getElementById("ts").textContent = "Ainda sem leituras.";
+  data.reverse().forEach(addPoint);
+  chart.update();
+
+  sb.channel("readings-live")
+    .on("postgres_changes", { event: "INSERT", schema: "public", table: "readings" },
+        payload => { addPoint(payload.new); chart.update(); })
+    .subscribe(status => {
+      document.getElementById("status").textContent =
+        status === "SUBSCRIBED" ? "● Em direto" : "Ligação: " + status;
+    });
+}
+
+init();
+</script>
+</body>
+</html>
