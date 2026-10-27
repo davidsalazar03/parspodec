@@ -3,87 +3,207 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sensor de Distância</title>
+<title>ParSpoDec — Lugares</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <style>
-  :root { --bg:#f6f7f9; --card:#fff; --fg:#1b1f24; --muted:#6b7280; --accent:#2563eb; }
+  :root {
+    --bg:#f6f7f9; --card:#fff; --fg:#1b1f24; --muted:#6b7280; --line:#e5e7eb;
+    --free:#15803d;  --free-bg:#dcfce7;
+    --taken:#b91c1c; --taken-bg:#fee2e2;
+    --unk:#4b5563;   --unk-bg:#eef0f3;
+  }
   @media (prefers-color-scheme: dark) {
-    :root { --bg:#0f1115; --card:#181b21; --fg:#e8eaed; --muted:#9aa0a6; --accent:#60a5fa; }
+    :root {
+      --bg:#0f1115; --card:#181b21; --fg:#e8eaed; --muted:#9aa0a6; --line:#2a2f37;
+      --free:#4ade80;  --free-bg:#10291a;
+      --taken:#f87171; --taken-bg:#331617;
+      --unk:#a1a7b0;   --unk-bg:#22262d;
+    }
   }
   * { box-sizing: border-box; }
   body { margin:0; padding:24px 16px; background:var(--bg); color:var(--fg);
-         font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
-  main { max-width: 900px; margin: 0 auto; }
-  h1 { font-size: 1.2rem; margin: 0 0 16px; color: var(--muted); font-weight: 600; }
-  .card { background:var(--card); border-radius:12px; padding:20px; margin-bottom:16px;
-          box-shadow: 0 1px 3px rgba(0,0,0,.08); }
-  #now { font-size: 3rem; font-weight: 700; color: var(--accent); line-height: 1; }
-  #ts, #status { color: var(--muted); font-size: .9rem; margin-top: 8px; }
-  .chart-wrap { position: relative; height: 320px; }
+         font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 720px; margin: 0 auto; }
+  header { display:flex; justify-content:space-between; align-items:baseline; gap:12px; margin-bottom:16px; }
+  h1 { font-size: 1.15rem; margin:0; font-weight:650; }
+  #status { color:var(--muted); font-size:.85rem; white-space:nowrap; }
+  #status.live { color:var(--free); }
+
+  .spots { display:grid; grid-template-columns: 1fr 1fr; gap:12px; margin-bottom:16px; }
+  .spot { border-radius:14px; padding:18px 16px; background:var(--unk-bg); color:var(--unk);
+          border:1px solid transparent; min-height:150px; display:flex; flex-direction:column; }
+  .spot[data-s="free"]  { background:var(--free-bg);  color:var(--free); }
+  .spot[data-s="taken"] { background:var(--taken-bg); color:var(--taken); }
+  .spot .name  { font-size:.85rem; font-weight:600; color:var(--fg); opacity:.75; }
+  .spot .state { font-size:clamp(1.6rem, 7vw, 2.4rem); font-weight:750; line-height:1.1; margin:10px 0 6px; }
+  .spot .sub   { font-size:.85rem; color:var(--fg); opacity:.7; margin-top:auto; }
+
+  .card { background:var(--card); border-radius:12px; padding:16px; box-shadow:0 1px 3px rgba(0,0,0,.08); }
+  h2 { font-size:.95rem; margin:0 0 10px; color:var(--muted); font-weight:600; }
+  table { width:100%; border-collapse:collapse; font-size:.9rem; }
+  th, td { text-align:left; padding:8px 6px; border-top:1px solid var(--line); }
+  th { color:var(--muted); font-weight:500; border-top:0; }
+  td.t { color:var(--muted); font-variant-numeric: tabular-nums; white-space:nowrap; }
+  .spot .why { display:block; margin-bottom:4px; }
+  .b { display:inline-block; padding:2px 8px; border-radius:999px; font-size:.8rem; font-weight:600;
+       background:var(--unk-bg); color:var(--unk); }
+  .b[data-s="free"]  { background:var(--free-bg);  color:var(--free); }
+  .b[data-s="taken"] { background:var(--taken-bg); color:var(--taken); }
+  #empty, #note { color:var(--muted); font-size:.85rem; }
+  #note { margin:14px 2px 0; }
 </style>
 </head>
 <body>
 <main>
-  <h1>Sensor de distância (HC-SR04)</h1>
-  <div class="card">
-    <div id="now">—</div>
-    <div id="ts">A carregar…</div>
-    <div id="status"></div>
-  </div>
-  <div class="card"><div class="chart-wrap"><canvas id="chart"></canvas></div></div>
+  <header>
+    <h1>Lugares de estacionamento</h1>
+    <span id="status">A ligar…</span>
+  </header>
+
+  <section class="spots">
+    <div class="spot" id="l1" data-s="unk">
+      <div class="name">Lugar 1 · mais perto</div>
+      <div class="state">—</div>
+      <div class="sub">A carregar…</div>
+    </div>
+    <div class="spot" id="l2" data-s="unk">
+      <div class="name">Lugar 2 · mais longe</div>
+      <div class="state">—</div>
+      <div class="sub">A carregar…</div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Histórico de mudanças</h2>
+    <table>
+      <thead><tr><th>Quando</th><th>Lugar 1</th><th>Lugar 2</th></tr></thead>
+      <tbody id="hist"></tbody>
+    </table>
+    <div id="empty" hidden>Ainda sem dados.</div>
+  </section>
+
+  <p id="note">O sensor só envia dados quando o estado de um lugar muda (e se mantém durante 30 s).</p>
 </main>
 
 <script>
 // ---- EDITAR ----
 const SUPABASE_URL = "https://fdhtxpfzvzvnziuorpau.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZkaHR4cGZ6dnp2bnppdW9ycGF1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI3MDUxNDQsImV4cCI6MjEwODI4MTE0NH0.y4VEuzERB8VGB-rCWbaK3LIuYo34rq3tt_tn0IswjHA";  // é pública por design; a RLS protege a tabela
+const TABLE = "spot_states";
 // ----------------
-const MAX_POINTS = 200;
+const HISTORY_FETCH = 100;  // linhas lidas (para calcular o "desde")
+const HISTORY_SHOW  = 20;   // linhas mostradas na tabela
 
-const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+let rows = [];  // mais recente primeiro
 
-const chart = new Chart(document.getElementById("chart"), {
-  type: "line",
-  data: { labels: [], datasets: [{ label: "Distância (cm)", data: [],
-          borderColor: "#2563eb", pointRadius: 0, tension: 0.2 }] },
-  options: { animation: false, maintainAspectRatio: false,
-             scales: { y: { beginAtZero: true } } }
-});
-
-function addPoint(row) {
-  const t = new Date(row.created_at);
-  chart.data.labels.push(t.toLocaleTimeString("pt-PT"));
-  chart.data.datasets[0].data.push(row.distance_cm);
-  if (chart.data.labels.length > MAX_POINTS) {
-    chart.data.labels.shift();
-    chart.data.datasets[0].data.shift();
-  }
-  document.getElementById("now").textContent = row.distance_cm.toFixed(1) + " cm";
-  document.getElementById("ts").textContent = "Última leitura: " + t.toLocaleString("pt-PT");
+// Traduz o código (-1 / 0 / 1) para texto e cor
+function describe(spot, row) {
+  const v = row[spot];
+  if (v === 0) return { s: "free",  text: "Livre" };
+  if (v === 1) return { s: "taken", text: "Ocupado" };
+  if (spot === "l2" && row.l1 === 1) return { s: "unk", text: "Não visível", why: "tapado pelo carro no Lugar 1" };
+  return { s: "unk", text: "Desconhecido", why: "leitura inválida (sensor tapado?)" };
 }
 
-async function init() {
-  const { data, error } = await sb.from("readings")
-    .select("distance_cm, created_at")
-    .order("created_at", { ascending: false })
-    .limit(MAX_POINTS);
+const fmtTime = t => t.toLocaleString("pt-PT", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 
-  if (error) {
-    document.getElementById("ts").textContent = "Erro: " + error.message;
+function ago(t) {
+  const s = Math.max(0, (Date.now() - t.getTime()) / 1000);
+  if (s < 60) return "há menos de 1 min";
+  const m = Math.floor(s / 60);
+  if (m < 60) return `há ${m} min`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `há ${h} h ${m % 60} min`;
+  const d = Math.floor(h / 24);
+  return `há ${d} dia${d > 1 ? "s" : ""}`;
+}
+
+// Desde quando é que este lugar está no estado atual (procura para trás no histórico)
+function since(spot) {
+  const cur = describe(spot, rows[0]);
+  let t = rows[0].created_at;
+  for (const r of rows) {
+    const d = describe(spot, r);
+    if (d.s !== cur.s || d.text !== cur.text) break;
+    t = r.created_at;
+  }
+  return new Date(t);
+}
+
+function renderSpot(spot) {
+  const el = document.getElementById(spot);
+  if (rows.length === 0) {
+    el.dataset.s = "unk";
+    el.querySelector(".state").textContent = "—";
+    el.querySelector(".sub").textContent = "Ainda sem dados";
     return;
   }
-  if (data.length === 0) document.getElementById("ts").textContent = "Ainda sem leituras.";
-  data.reverse().forEach(addPoint);
-  chart.update();
+  const d = describe(spot, rows[0]);
+  const t = since(spot);
+  el.dataset.s = d.s;
+  el.querySelector(".state").textContent = d.text;
+  const sub = el.querySelector(".sub");
+  sub.replaceChildren();
+  if (d.why) {
+    const w = document.createElement("span"); w.className = "why"; w.textContent = d.why;
+    sub.append(w);
+  }
+  sub.append("desde " + fmtTime(t) + " (" + ago(t) + ")");
+}
 
-  sb.channel("readings-live")
-    .on("postgres_changes", { event: "INSERT", schema: "public", table: "readings" },
-        payload => { addPoint(payload.new); chart.update(); })
+function badge(spot, row) {
+  const d = describe(spot, row);
+  const b = document.createElement("span");
+  b.className = "b"; b.dataset.s = d.s; b.textContent = d.text;
+  return b;
+}
+
+function renderHistory() {
+  const tb = document.getElementById("hist");
+  tb.replaceChildren();
+  document.getElementById("empty").hidden = rows.length > 0;
+  for (const r of rows.slice(0, HISTORY_SHOW)) {
+    const tr = document.createElement("tr");
+    const t = document.createElement("td"); t.className = "t"; t.textContent = fmtTime(new Date(r.created_at));
+    const a = document.createElement("td"); a.append(badge("l1", r));
+    const b = document.createElement("td"); b.append(badge("l2", r));
+    tr.append(t, a, b);
+    tb.append(tr);
+  }
+}
+
+function render() { renderSpot("l1"); renderSpot("l2"); renderHistory(); }
+
+async function init() {
+  if (typeof supabase === "undefined") {
+    document.getElementById("status").textContent = "Erro a carregar a biblioteca";
+    return;
+  }
+  const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+  const { data, error } = await sb.from(TABLE)
+    .select("l1, l2, created_at")
+    .order("created_at", { ascending: false })
+    .limit(HISTORY_FETCH);
+
+  if (error) {
+    document.getElementById("status").textContent = "Erro: " + error.message;
+    return;
+  }
+  rows = data;
+  render();
+
+  sb.channel("spot-states-live")
+    .on("postgres_changes", { event: "INSERT", schema: "public", table: TABLE },
+        payload => { rows.unshift(payload.new); rows.length = Math.min(rows.length, HISTORY_FETCH); render(); })
     .subscribe(status => {
-      document.getElementById("status").textContent =
-        status === "SUBSCRIBED" ? "● Em direto" : "Ligação: " + status;
+      const el = document.getElementById("status");
+      el.textContent = status === "SUBSCRIBED" ? "● Em direto" : "Ligação: " + status;
+      el.classList.toggle("live", status === "SUBSCRIBED");
     });
+
+  // Atualiza o "há X min" de 30 em 30 s
+  setInterval(() => { if (rows.length) { renderSpot("l1"); renderSpot("l2"); } }, 30000);
 }
 
 init();
