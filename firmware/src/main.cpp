@@ -42,6 +42,10 @@ bool SEND_NEW_STATE = false;
 unsigned long READ_INTERVAL_MS = 1000UL;   // 1 s
 unsigned long lastRead = 0;
 
+// Debug: pedidos de distância vindos do site
+const unsigned long REQ_POLL_INTERVAL_MS = 3000UL;   // de quanto em quanto tempo o ESP32 vai ver se há pedidos
+unsigned long lastReqPoll = 0;
+
 // Spots codes: -1 -> unkown; 0 -> empty; 1 -> taken;
 int L1 = -1;
 int L2 = -1;
@@ -111,11 +115,73 @@ bool sendReading(){
   return code == 201;
 }
 
+// DEBUG: PEDIDOS DE DISTÂNCIA (vindos do site) -----------------------
+// O site não consegue falar diretamente com o ESP32 (está atrás do router),
+// por isso escreve um "pedido" na tabela distance_requests e o ESP32 vai lá
+// verificar de REQ_POLL_INTERVAL_MS em REQ_POLL_INTERVAL_MS.
+
+// Pergunta ao Supabase se há algum pedido por responder. Devolve true se houver.
+bool checkDistanceRequest(){
+  if (WiFi.status() != WL_CONNECTED) return false;   // não bloqueia à espera do Wi-Fi
+
+  WiFiClientSecure client;
+  client.setInsecure();
+
+  HTTPClient http;
+  // Basta saber se existe pelo menos 1 pedido com answered_at vazio
+  String url = String(SUPABASE_REQ_URL) + "?answered_at=is.null&select=id&limit=1";
+  if (!http.begin(client, url)){
+    Serial.println("[REQ] http.begin falhou");
+    return false;
+  }
+  http.addHeader("apikey", SUPABASE_KEY);
+
+  int code = http.GET();
+  String payload = (code == 200) ? http.getString() : "";
+  http.end();
+
+  if (code != 200){
+    Serial.printf("[REQ] GET -> %d\n", code);
+    return false;
+  }
+  return payload.length() > 2;   // "[]" = sem pedidos; "[{\"id\":7}]" = há pedido
+}
+
+// Responde a todos os pedidos pendentes com a distância indicada (em cm).
+// Devolve true se o servidor aceitou (HTTP 204).
+bool sendDistance(float d){
+  if (WiFi.status() != WL_CONNECTED) return false;
+
+  WiFiClientSecure client;
+  client.setInsecure();
+
+  HTTPClient http;
+  String url = String(SUPABASE_REQ_URL) + "?answered_at=is.null";
+  if (!http.begin(client, url)){
+    Serial.println("[REQ] http.begin falhou");
+    return false;
+  }
+  http.addHeader("apikey", SUPABASE_KEY);
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("Prefer", "return=minimal");
+
+  // A hora da resposta (answered_at) é preenchida pelo servidor
+  String body = "{\"distance_cm\":" + String(d, 1) + "}";
+
+  int code = http.PATCH(body);
+  Serial.printf("[REQ] PATCH %s -> %d\n", body.c_str(), code);
+
+  if (code != 204) Serial.println(http.getString());
+  http.end();
+
+  return code == 204;
+}
+
 // DISTANCE ------------------------------------------------------------
 
 //Returns the average of the last 5 distance readings from the sensor 
 float compute_latest_distance(){
-  float dist_sum;
+  float dist_sum = 0;
   int valid = 0;
   
   for (int i = 0; i < N_SAMPLES; i++){
@@ -281,7 +347,13 @@ void loop () {
   }
 
   if (SEND_NEW_STATE && sendReading()){
-    SEND_NEW_STATE == false;
+    SEND_NEW_STATE = false;
+  }
+
+  // Debug: responde aos pedidos de distância feitos no site
+  if (millis() - lastReqPoll >= REQ_POLL_INTERVAL_MS){
+    lastReqPoll = millis();
+    if (checkDistanceRequest()) sendDistance(currDistance);
   }
 
 }

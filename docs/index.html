@@ -8,49 +8,77 @@
 <style>
   :root {
     --bg:#f6f7f9; --card:#fff; --fg:#1b1f24; --muted:#6b7280; --line:#e5e7eb;
+    --accent:#2563eb; --accent-fg:#fff;
     --free:#15803d;  --free-bg:#dcfce7;
     --taken:#b91c1c; --taken-bg:#fee2e2;
     --unk:#4b5563;   --unk-bg:#eef0f3;
+    --warn:#b45309;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg:#0f1115; --card:#181b21; --fg:#e8eaed; --muted:#9aa0a6; --line:#2a2f37;
+      --accent:#60a5fa; --accent-fg:#0b1220;
       --free:#4ade80;  --free-bg:#10291a;
       --taken:#f87171; --taken-bg:#331617;
       --unk:#a1a7b0;   --unk-bg:#22262d;
+      --warn:#fbbf24;
     }
   }
   * { box-sizing: border-box; }
   body { margin:0; padding:24px 16px; background:var(--bg); color:var(--fg);
          font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
   main { max-width: 720px; margin: 0 auto; }
-  header { display:flex; justify-content:space-between; align-items:baseline; gap:12px; margin-bottom:16px; }
+  header { display:flex; justify-content:space-between; align-items:baseline; gap:12px; margin-bottom:14px; }
   h1 { font-size: 1.15rem; margin:0; font-weight:650; }
   #status { color:var(--muted); font-size:.85rem; white-space:nowrap; }
   #status.live { color:var(--free); }
 
+  /* Abas */
+  nav.tabs { display:flex; gap:4px; padding:4px; background:var(--card); border-radius:10px;
+             box-shadow:0 1px 3px rgba(0,0,0,.08); margin-bottom:16px; }
+  nav.tabs a { flex:1; text-align:center; padding:8px 10px; border-radius:7px; font-size:.9rem;
+               font-weight:600; color:var(--muted); text-decoration:none; }
+  nav.tabs a[aria-current="page"] { background:var(--bg); color:var(--fg); }
+  .panel[hidden] { display:none; }
+
   .spots { display:grid; grid-template-columns: 1fr 1fr; gap:12px; margin-bottom:16px; }
   .spot { border-radius:14px; padding:18px 16px; background:var(--unk-bg); color:var(--unk);
-          border:1px solid transparent; min-height:150px; display:flex; flex-direction:column; }
+          min-height:150px; display:flex; flex-direction:column; }
   .spot[data-s="free"]  { background:var(--free-bg);  color:var(--free); }
   .spot[data-s="taken"] { background:var(--taken-bg); color:var(--taken); }
   .spot .name  { font-size:.85rem; font-weight:600; color:var(--fg); opacity:.75; }
   .spot .state { font-size:clamp(1.6rem, 7vw, 2.4rem); font-weight:750; line-height:1.1; margin:10px 0 6px; }
   .spot .sub   { font-size:.85rem; color:var(--fg); opacity:.7; margin-top:auto; }
+  .spot .why   { display:block; margin-bottom:4px; }
 
-  .card { background:var(--card); border-radius:12px; padding:16px; box-shadow:0 1px 3px rgba(0,0,0,.08); }
+  .card { background:var(--card); border-radius:12px; padding:16px; box-shadow:0 1px 3px rgba(0,0,0,.08); margin-bottom:16px; }
   h2 { font-size:.95rem; margin:0 0 10px; color:var(--muted); font-weight:600; }
   table { width:100%; border-collapse:collapse; font-size:.9rem; }
   th, td { text-align:left; padding:8px 6px; border-top:1px solid var(--line); }
   th { color:var(--muted); font-weight:500; border-top:0; }
   td.t { color:var(--muted); font-variant-numeric: tabular-nums; white-space:nowrap; }
-  .spot .why { display:block; margin-bottom:4px; }
+  td.n { font-variant-numeric: tabular-nums; white-space:nowrap; }
   .b { display:inline-block; padding:2px 8px; border-radius:999px; font-size:.8rem; font-weight:600;
        background:var(--unk-bg); color:var(--unk); }
   .b[data-s="free"]  { background:var(--free-bg);  color:var(--free); }
   .b[data-s="taken"] { background:var(--taken-bg); color:var(--taken); }
-  #empty, #note { color:var(--muted); font-size:.85rem; }
-  #note { margin:14px 2px 0; }
+  .empty, #note { color:var(--muted); font-size:.85rem; }
+  #note { margin:0 2px; }
+
+  /* Aba Distância */
+  .req { display:flex; flex-wrap:wrap; align-items:center; gap:12px 16px; }
+  button { font:inherit; font-weight:650; padding:10px 18px; border-radius:10px; border:0;
+           background:var(--accent); color:var(--accent-fg); cursor:pointer; }
+  button:disabled { opacity:.55; cursor:default; }
+  #reqStatus { color:var(--muted); font-size:.9rem; }
+  #reqStatus.warn { color:var(--warn); }
+  #distNow { font-size:clamp(2.2rem, 10vw, 3.2rem); font-weight:750; line-height:1; margin:18px 0 6px;
+             font-variant-numeric: tabular-nums; }
+  #distMeta { color:var(--muted); font-size:.85rem; }
+  .muted { color:var(--muted); }
+  .scroll { overflow-x:auto; }
+  .scroll th, .scroll td { padding:8px 4px; }
+  .scroll td .b { white-space:nowrap; }
 </style>
 </head>
 <body>
@@ -60,52 +88,103 @@
     <span id="status">A ligar…</span>
   </header>
 
-  <section class="spots">
-    <div class="spot" id="l1" data-s="unk">
-      <div class="name">Lugar 1 · mais perto</div>
-      <div class="state">—</div>
-      <div class="sub">A carregar…</div>
-    </div>
-    <div class="spot" id="l2" data-s="unk">
-      <div class="name">Lugar 2 · mais longe</div>
-      <div class="state">—</div>
-      <div class="sub">A carregar…</div>
-    </div>
-  </section>
+  <nav class="tabs">
+    <a href="#lugares" data-tab="lugares">Lugares</a>
+    <a href="#distancia" data-tab="distancia">Distância (debug)</a>
+  </nav>
 
-  <section class="card">
-    <h2>Histórico de mudanças</h2>
-    <table>
-      <thead><tr><th>Quando</th><th>Lugar 1</th><th>Lugar 2</th></tr></thead>
-      <tbody id="hist"></tbody>
-    </table>
-    <div id="empty" hidden>Ainda sem dados.</div>
-  </section>
+  <!-- ABA: LUGARES -->
+  <div class="panel" id="panel-lugares">
+    <section class="spots">
+      <div class="spot" id="l1" data-s="unk">
+        <div class="name">Lugar 1 · mais perto</div>
+        <div class="state">—</div>
+        <div class="sub">A carregar…</div>
+      </div>
+      <div class="spot" id="l2" data-s="unk">
+        <div class="name">Lugar 2 · mais longe</div>
+        <div class="state">—</div>
+        <div class="sub">A carregar…</div>
+      </div>
+    </section>
 
-  <p id="note">O sensor só envia dados quando o estado de um lugar muda (e se mantém durante 30 s).</p>
+    <section class="card">
+      <h2>Histórico de mudanças</h2>
+      <table>
+        <thead><tr><th>Quando</th><th>Lugar 1</th><th>Lugar 2</th></tr></thead>
+        <tbody id="hist"></tbody>
+      </table>
+      <div class="empty" id="histEmpty" hidden>Ainda sem dados.</div>
+    </section>
+
+    <p id="note">O sensor só envia dados quando o estado de um lugar muda (e se mantém durante 30 s).</p>
+  </div>
+
+  <!-- ABA: DISTÂNCIA -->
+  <div class="panel" id="panel-distancia" hidden>
+    <section class="card">
+      <div class="req">
+        <button id="reqBtn">Pedir distância</button>
+        <span id="reqStatus">O sensor verifica pedidos de 5 em 5 s.</span>
+      </div>
+      <div id="distNow">—</div>
+      <div id="distMeta">Ainda sem leituras pedidas.</div>
+    </section>
+
+    <section class="card">
+      <h2>Leituras pedidas</h2>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Pedido</th><th>Distância</th><th>Estado</th><th>Demora</th></tr></thead>
+          <tbody id="reqHist"></tbody>
+        </table>
+      </div>
+      <div class="empty" id="reqEmpty" hidden>Ainda sem pedidos.</div>
+    </section>
+  </div>
 </main>
 
 <script>
 // ---- EDITAR ----
 const SUPABASE_URL = "https://fdhtxpfzvzvnziuorpau.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZkaHR4cGZ6dnp2bnppdW9ycGF1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI3MDUxNDQsImV4cCI6MjEwODI4MTE0NH0.y4VEuzERB8VGB-rCWbaK3LIuYo34rq3tt_tn0IswjHA";  // é pública por design; a RLS protege a tabela
-const TABLE = "spot_states";
+const TABLE     = "spot_states";
+const REQ_TABLE = "distance_requests";
+const LIMITS    = [120, 180, 350];  // cm — manter igual a spot_limits[] no firmware
+const NO_ECHO   = 999;              // valor que o firmware envia quando não há eco
+const REQ_TIMEOUT_S = 30;           // aviso se o sensor não responder em X s
 // ----------------
 const HISTORY_FETCH = 100;  // linhas lidas (para calcular o "desde")
 const HISTORY_SHOW  = 20;   // linhas mostradas na tabela
+const REQ_SHOW      = 20;
 
-let rows = [];  // mais recente primeiro
+const $ = id => document.getElementById(id);
+let sb;
+let rows = [];     // spot_states, mais recente primeiro
+let reqs = [];     // distance_requests, mais recente primeiro
+let pendingId = null, pendingSince = 0, pendingTimer = null;
 
-// Traduz o código (-1 / 0 / 1) para texto e cor
-function describe(spot, row) {
-  const v = row[spot];
-  if (v === 0) return { s: "free",  text: "Livre" };
-  if (v === 1) return { s: "taken", text: "Ocupado" };
-  if (spot === "l2" && row.l1 === 1) return { s: "unk", text: "Não visível", why: "tapado pelo carro no Lugar 1" };
-  return { s: "unk", text: "Desconhecido", why: "leitura inválida (sensor tapado?)" };
+// ---------- Abas ----------
+function showTab() {
+  const tab = location.hash === "#distancia" ? "distancia" : "lugares";
+  for (const a of document.querySelectorAll("nav.tabs a")) {
+    if (a.dataset.tab === tab) a.setAttribute("aria-current", "page");
+    else a.removeAttribute("aria-current");
+  }
+  $("panel-lugares").hidden   = tab !== "lugares";
+  $("panel-distancia").hidden = tab !== "distancia";
 }
+window.addEventListener("hashchange", showTab);
+showTab();
 
+// ---------- Utilitários ----------
 const fmtTime = t => t.toLocaleString("pt-PT", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+// Hora com segundos; só mostra o dia se não for hoje
+const fmtTimeSec = t => {
+  const hms = t.toLocaleTimeString("pt-PT", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  return t.toDateString() === new Date().toDateString()
+    ? hms : t.toLocaleDateString("pt-PT", { day: "2-digit", month: "2-digit" }) + " " + hms;
+};
 
 function ago(t) {
   const s = Math.max(0, (Date.now() - t.getTime()) / 1000);
@@ -116,6 +195,22 @@ function ago(t) {
   if (h < 24) return `há ${h} h ${m % 60} min`;
   const d = Math.floor(h / 24);
   return `há ${d} dia${d > 1 ? "s" : ""}`;
+}
+
+function mkBadge(d) {
+  const b = document.createElement("span");
+  b.className = "b"; b.dataset.s = d.s; b.textContent = d.text;
+  return b;
+}
+
+// ---------- Aba Lugares ----------
+// Traduz o código (-1 / 0 / 1) para texto e cor
+function describe(spot, row) {
+  const v = row[spot];
+  if (v === 0) return { s: "free",  text: "Livre" };
+  if (v === 1) return { s: "taken", text: "Ocupado" };
+  if (spot === "l2" && row.l1 === 1) return { s: "unk", text: "Não visível", why: "tapado pelo carro no Lugar 1" };
+  return { s: "unk", text: "Desconhecido", why: "leitura inválida (sensor tapado?)" };
 }
 
 // Desde quando é que este lugar está no estado atual (procura para trás no histórico)
@@ -131,18 +226,18 @@ function since(spot) {
 }
 
 function renderSpot(spot) {
-  const el = document.getElementById(spot);
+  const el = $(spot);
+  const sub = el.querySelector(".sub");
   if (rows.length === 0) {
     el.dataset.s = "unk";
     el.querySelector(".state").textContent = "—";
-    el.querySelector(".sub").textContent = "Ainda sem dados";
+    sub.textContent = "Ainda sem dados";
     return;
   }
   const d = describe(spot, rows[0]);
   const t = since(spot);
   el.dataset.s = d.s;
   el.querySelector(".state").textContent = d.text;
-  const sub = el.querySelector(".sub");
   sub.replaceChildren();
   if (d.why) {
     const w = document.createElement("span"); w.className = "why"; w.textContent = d.why;
@@ -151,59 +246,162 @@ function renderSpot(spot) {
   sub.append("desde " + fmtTime(t) + " (" + ago(t) + ")");
 }
 
-function badge(spot, row) {
-  const d = describe(spot, row);
-  const b = document.createElement("span");
-  b.className = "b"; b.dataset.s = d.s; b.textContent = d.text;
-  return b;
-}
-
 function renderHistory() {
-  const tb = document.getElementById("hist");
+  const tb = $("hist");
   tb.replaceChildren();
-  document.getElementById("empty").hidden = rows.length > 0;
+  $("histEmpty").hidden = rows.length > 0;
   for (const r of rows.slice(0, HISTORY_SHOW)) {
     const tr = document.createElement("tr");
     const t = document.createElement("td"); t.className = "t"; t.textContent = fmtTime(new Date(r.created_at));
-    const a = document.createElement("td"); a.append(badge("l1", r));
-    const b = document.createElement("td"); b.append(badge("l2", r));
+    const a = document.createElement("td"); a.append(mkBadge(describe("l1", r)));
+    const b = document.createElement("td"); b.append(mkBadge(describe("l2", r)));
     tr.append(t, a, b);
     tb.append(tr);
   }
 }
 
-function render() { renderSpot("l1"); renderSpot("l2"); renderHistory(); }
+function renderSpots() { renderSpot("l1"); renderSpot("l2"); renderHistory(); }
 
+// ---------- Aba Distância ----------
+// O que o firmware concluiria com esta distância (mesma lógica de evalute_sensor_reading)
+function interpret(d) {
+  if (d >= NO_ECHO)    return { s: "free",  text: "Sem eco" };
+  if (d <= LIMITS[0])  return { s: "unk",   text: "Muito perto → erro" };
+  if (d <= LIMITS[1])  return { s: "taken", text: "L1 ocupado" };
+  if (d <= LIMITS[2])  return { s: "taken", text: "L2 ocupado" };
+  return { s: "free", text: "Ambos livres" };
+}
+
+const fmtDist = d => d >= NO_ECHO ? "Sem eco" : d.toFixed(1).replace(".", ",") + " cm";
+const respSecs = r => (new Date(r.answered_at) - new Date(r.requested_at)) / 1000;
+
+function renderReqs() {
+  // Última leitura respondida
+  const last = reqs.find(r => r.answered_at);
+  if (last) {
+    $("distNow").textContent = fmtDist(last.distance_cm);
+    const it = interpret(last.distance_cm);
+    $("distMeta").replaceChildren(
+      mkBadge(it), " ",
+      "lida às " + fmtTimeSec(new Date(last.answered_at)) + " (" + ago(new Date(last.answered_at)) + ")"
+    );
+  }
+
+  // Tabela
+  const tb = $("reqHist");
+  tb.replaceChildren();
+  $("reqEmpty").hidden = reqs.length > 0;
+  for (const r of reqs.slice(0, REQ_SHOW)) {
+    const tr = document.createElement("tr");
+    const t = document.createElement("td"); t.className = "t"; t.textContent = fmtTimeSec(new Date(r.requested_at));
+    const d = document.createElement("td"); d.className = "n";
+    const c = document.createElement("td");
+    const s = document.createElement("td"); s.className = "n muted";
+    if (r.answered_at) {
+      d.textContent = fmtDist(r.distance_cm);
+      c.append(mkBadge(interpret(r.distance_cm)));
+      s.textContent = respSecs(r).toFixed(1).replace(".", ",") + " s";
+    } else {
+      d.textContent = "—"; c.textContent = "—"; s.textContent = "pendente";
+    }
+    tr.append(t, d, c, s);
+    tb.append(tr);
+  }
+}
+
+function upsertReq(r) {
+  const i = reqs.findIndex(x => x.id === r.id);
+  if (i >= 0) reqs[i] = r; else reqs.unshift(r);
+  reqs.sort((a, b) => b.id - a.id);
+  reqs.length = Math.min(reqs.length, 50);
+  if (pendingId !== null && r.id === pendingId && r.answered_at) finishPending(r);
+  renderReqs();
+}
+
+function setReqStatus(text, warn = false) {
+  $("reqStatus").textContent = text;
+  $("reqStatus").classList.toggle("warn", warn);
+}
+
+function finishPending(r) {
+  clearInterval(pendingTimer);
+  pendingId = null;
+  $("reqBtn").disabled = false;
+  setReqStatus("O sensor respondeu em " + respSecs(r).toFixed(1).replace(".", ",") + " s.");
+}
+
+async function requestDistance() {
+  $("reqBtn").disabled = true;
+  setReqStatus("A enviar pedido…");
+  const { data, error } = await sb.from(REQ_TABLE)
+    .insert({ distance_cm: null })
+    .select("id, requested_at, answered_at, distance_cm")
+    .single();
+  if (error) {
+    $("reqBtn").disabled = false;
+    setReqStatus("Erro: " + error.message, true);
+    return;
+  }
+  pendingId = data.id;
+  pendingSince = Date.now();
+  upsertReq(data);
+  const tick = () => {
+    const s = Math.round((Date.now() - pendingSince) / 1000);
+    if (s < REQ_TIMEOUT_S) setReqStatus(`À espera do sensor… ${s} s`);
+    else {
+      setReqStatus(`Sem resposta há ${s} s — o sensor está ligado e com Wi-Fi? (o pedido fica pendente)`, true);
+      $("reqBtn").disabled = false;
+    }
+  };
+  tick();
+  pendingTimer = setInterval(tick, 1000);
+}
+$("reqBtn").addEventListener("click", requestDistance);
+
+// ---------- Arranque ----------
 async function init() {
   if (typeof supabase === "undefined") {
-    document.getElementById("status").textContent = "Erro a carregar a biblioteca";
+    $("status").textContent = "Erro a carregar a biblioteca";
     return;
   }
-  const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-  const { data, error } = await sb.from(TABLE)
-    .select("l1, l2, created_at")
-    .order("created_at", { ascending: false })
-    .limit(HISTORY_FETCH);
+  const [spotsRes, reqRes] = await Promise.all([
+    sb.from(TABLE).select("l1, l2, created_at").order("created_at", { ascending: false }).limit(HISTORY_FETCH),
+    sb.from(REQ_TABLE).select("id, requested_at, answered_at, distance_cm").order("id", { ascending: false }).limit(50),
+  ]);
 
-  if (error) {
-    document.getElementById("status").textContent = "Erro: " + error.message;
-    return;
+  if (spotsRes.error) {
+    $("status").textContent = "Erro: " + spotsRes.error.message;
+  } else {
+    rows = spotsRes.data;
+    renderSpots();
   }
-  rows = data;
-  render();
 
-  sb.channel("spot-states-live")
+  if (reqRes.error) {
+    setReqStatus("Erro: " + reqRes.error.message, true);
+    $("reqBtn").disabled = true;
+  } else {
+    reqs = reqRes.data;
+    renderReqs();
+  }
+
+  sb.channel("parspodec-live")
     .on("postgres_changes", { event: "INSERT", schema: "public", table: TABLE },
-        payload => { rows.unshift(payload.new); rows.length = Math.min(rows.length, HISTORY_FETCH); render(); })
+        payload => { rows.unshift(payload.new); rows.length = Math.min(rows.length, HISTORY_FETCH); renderSpots(); })
+    .on("postgres_changes", { event: "*", schema: "public", table: REQ_TABLE },
+        payload => { if (payload.new && payload.new.id) upsertReq(payload.new); })
     .subscribe(status => {
-      const el = document.getElementById("status");
+      const el = $("status");
       el.textContent = status === "SUBSCRIBED" ? "● Em direto" : "Ligação: " + status;
       el.classList.toggle("live", status === "SUBSCRIBED");
     });
 
-  // Atualiza o "há X min" de 30 em 30 s
-  setInterval(() => { if (rows.length) { renderSpot("l1"); renderSpot("l2"); } }, 30000);
+  // Atualiza os "há X min" de 30 em 30 s
+  setInterval(() => {
+    if (rows.length) { renderSpot("l1"); renderSpot("l2"); }
+    if (reqs.length) renderReqs();
+  }, 30000);
 }
 
 init();
