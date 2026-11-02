@@ -1,0 +1,9 @@
+EESchema-DOCLIB  Version 2.0
+#
+$CMP SRP4020FA-4R7M
+D Power Inductors - SMD 4.7uH 20% 5.1A
+K
+F https://www.bourns.com/docs/Product-Datasheets/SRP4020FA.pdf
+$ENDCMP
+#
+#End Doc Library

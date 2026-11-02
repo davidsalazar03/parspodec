@@ -1,0 +1,9 @@
+EESchema-DOCLIB  Version 2.0
+#
+$CMP MF-R075-2
+D Resettable Fuses - PPTC 0.75A 60V 0.18ohm Hold .75 Trip 1.5
+K
+F https://www.arrow.com/en/products/mf-r075-2/bourns
+$ENDCMP
+#
+#End Doc Library

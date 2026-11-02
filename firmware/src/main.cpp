@@ -5,82 +5,173 @@
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 
+#define DEEP_SLEEP_TIME 20   // in seconds
+
 // FSM LOGIC -----------------------
 
 enum class FSMState {INIT, IDLE, PROBING, SWITCH};
 
 typedef struct {
-  FSMState state{FSMState::INIT};
-  FSMState new_state{FSMState::INIT};
-  unsigned long tes, tis;
+  FSMState state;
+  FSMState new_state;
+  unsigned long ces, cis;
 } fsm_t;
 
+// <!> ----------- PERSISTENT MEMMORY VARIABLES ----------- <!> 
+
+RTC_DATA_ATTR fsm_t spots_fsm = {FSMState::INIT, FSMState::INIT, 0, 0};     // FSM
+
+RTC_DATA_ATTR unsigned int current_cycle_count = 0;
+
+//RTC_DATA_ATTR unsigned long lastRead = 0;       // Time of last reading
+//RTC_DATA_ATTR unsigned long lastReqPoll = 0;    // Time of last request pooling
+
+RTC_DATA_ATTR int current_d_code = -1;          // Current d-code (defines the spot's state)
+RTC_DATA_ATTR int last_d_code = -1;             // Last d-code
+RTC_DATA_ATTR int candidate_d_code = -1;        // D-code candidate to switch with the current one
+
+RTC_DATA_ATTR unsigned int LAST_REQ_SENT_CYCLE = 0;
+
+RTC_DATA_ATTR bool SEND_NEW_STATE = false;  // True when the state of the spots changes and that info must be sent via WiFi
+
+// Spots codes: -1 -> unkown; 0 -> empty; 1 -> taken;
+RTC_DATA_ATTR int L1 = -1;
+RTC_DATA_ATTR int L2 = -1;
+
+// WiFi Connection Data
+RTC_DATA_ATTR bool wifi_cache_valid = false;
+RTC_DATA_ATTR int32_t  wifi_channel =     0;
+RTC_DATA_ATTR uint8_t wifi_bssid[6] =   {0};
+
+RTC_DATA_ATTR bool     ip_cache_valid = false;
+RTC_DATA_ATTR uint32_t ip_local, ip_gw, ip_mask, ip_dns;
+RTC_DATA_ATTR unsigned int ip_cached_cycle = 0;
+
+// <!> ----------------------------------------------------- <!>        
+
+// FSM Function to change states
 void set_state(fsm_t& fsm, FSMState new_state)
 {
   if (fsm.state != new_state) {  // if the state changed tis is reset
     fsm.state = new_state;
-    fsm.tes = millis();
-    fsm.tis = 0;
+    fsm.ces = current_cycle_count;
+    fsm.cis = 0;
   }
 }
-
-fsm_t spots_fsm;
 
 // PINS --------------------------
 int trigPin = 5;       //TRIG pin do HC-SR04 - jumpers amarelo + verde
 int echoPin = 18;      //ECHO pin do HC-SR04 - jumpers laranja + azul
 
 // CONSTANTS
-const int N_SAMPLES = 4;
 const int BAUDRATE = 115200;
 const unsigned long ECHO_TIMEOUT_US = 30000UL;
+const unsigned int NO_SENT_CYCLE_THRESHOLD = 5;
+const unsigned int cycles_threshold_4switch = 3;     // 60s
+const unsigned int IP_REFRESH_CYCLES = 43200 / DEEP_SLEEP_TIME;   // ~12h ajustadas em #ciclos
+
 
 // GLOBALS -----------------------
 float currDistance = 0.0;
-float distances[N_SAMPLES] = {0};
-bool SEND_NEW_STATE = false;
-unsigned long READ_INTERVAL_MS = 1000UL;   // 1 s
-unsigned long lastRead = 0;
 
 // Debug: pedidos de distância vindos do site
-const unsigned long REQ_POLL_INTERVAL_MS = 3000UL;   // de quanto em quanto tempo o ESP32 vai ver se há pedidos
-unsigned long lastReqPoll = 0;
-
-// Spots codes: -1 -> unkown; 0 -> empty; 1 -> taken;
-int L1 = -1;
-int L2 = -1;
 float spot_limits[] = {120.0, 180.0, 350.0};    // in cm
-int current_d_code = -1;
-int last_d_code = -1;
-int candidate_d_code = -1;
-unsigned long time_threshold_MS = 30000UL;     // 30s
 
-// In the INIT State, the system computes the average distance for 5s before deciding what the initial spot's state should be
-float INIT_avg_dist = 0.0;  // cm
-int INIT_count_dist = 0;
+float WAKEUP_TIME = 0.0;
 
 // PROTOTYPES --------------------
 float sampleDistance();
+void go_to_deep_sleep();
 int evalute_sensor_reading(float d);
 void update_spots_state(int code);
 
+// DeepSleep ---------------------
+
+void go_to_deep_sleep(){
+  Serial.print("Remained active for "); Serial.print(millis() - WAKEUP_TIME); Serial.println(" ms.");
+  Serial.println(">>> Entering DEEP SLEEP Mode. ");
+  Serial.flush();
+  esp_sleep_enable_timer_wakeup(DEEP_SLEEP_TIME * 1000000); 
+  esp_deep_sleep_start();
+}
+
 // WiFi --------------------------
+
+// --- IP fixo ---
+IPAddress local_IP(192, 168, 1, 73);
+IPAddress gateway (192, 168, 1, 1);
+IPAddress subnet  (255, 255, 255, 0);
+IPAddress dns     (192, 168, 1, 1); 
+
+bool wait_for_wifi(unsigned long timeout_ms){
+  unsigned long t0 = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - t0 < timeout_ms) delay(20);
+  return WiFi.status() == WL_CONNECTED;
+}
+
 void connect_wifi(){
+
   if(WiFi.status() == WL_CONNECTED) return;
 
+  WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-  
-  Serial.print("A conectar ao Wi-Fi...");
 
-  unsigned long t0 = millis();
-  
-  while(WiFi.status() != WL_CONNECTED && (millis() - t0 < 15000)){
-    delay(500);
-    Serial.print(".");
+  // Usa o IP guardado só se existir e ainda não estiver "velho"
+  bool use_static = ip_cache_valid && (current_cycle_count - ip_cached_cycle < IP_REFRESH_CYCLES);
+
+  if (use_static){
+    WiFi.config(IPAddress(ip_local), IPAddress(ip_gw),
+                IPAddress(ip_mask),  IPAddress(ip_dns));
+  } else {
+    Serial.println("[WIFI] Using DHCP to obtain a new IP Address...");
   }
 
-  Serial.println(WiFi.status() == WL_CONNECTED ? "[WIFI RESULT] CONEXÃO COMPLETA " : "[WIFI RESULT] CONEXÃO FALHOU");
+  unsigned long t0 = millis();
+  bool ok = false;
+
+  // 1) QUICK Connection: wifi channel + BSSID already known (smaller waiting time)
+  if (wifi_cache_valid){
+    WiFi.begin(WIFI_SSID, WIFI_PASS, wifi_channel, wifi_bssid);
+    ok = wait_for_wifi(3000);
+
+    if (!ok){ 
+      WiFi.disconnect(); 
+      wifi_cache_valid = false; 
+      ip_cache_valid = false;
+      if(use_static){
+        WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE);   // Invalidate the IP Address as well so that the next WiFi connection doesnt use the old one
+        use_static = false;
+      }
+    }  
+
+  }
+
+  // 2) NORMAL Connection (1st boot or failure on the QUICK connection) (wifi channel/bssid unkonwn, bigger waiting time)
+  if (!ok){
+    WiFi.begin(WIFI_SSID, WIFI_PASS);
+    ok = wait_for_wifi(15000);
+  }
+
+  // 3) Store the wifi channel + BSSID for the next connection
+  if (ok){
+    wifi_channel = WiFi.channel();
+    memcpy(wifi_bssid, WiFi.BSSID(), 6);
+    wifi_cache_valid = true;
+    Serial.printf("[WIFI] RSSI = %d dBm\n", WiFi.RSSI());
+  }
+
+  // 4) Store the ip cache after a DHCP Call for the next connections
+  if (ok && !use_static){          
+    ip_local = WiFi.localIP();
+    ip_gw    = WiFi.gatewayIP();
+    ip_mask  = WiFi.subnetMask();
+    ip_dns   = WiFi.dnsIP();
+    ip_cached_cycle = current_cycle_count;
+    ip_cache_valid  = true;
+  }
+
+  Serial.printf("[WIFI] %s em %lu ms\n", ok ? "OK" : "FALHOU", millis() - t0);
+
 
 }
 
@@ -122,6 +213,8 @@ bool sendReading(){
 
 // Pergunta ao Supabase se há algum pedido por responder. Devolve true se houver.
 bool checkDistanceRequest(){
+
+  connect_wifi();
   if (WiFi.status() != WL_CONNECTED) return false;   // não bloqueia à espera do Wi-Fi
 
   WiFiClientSecure client;
@@ -136,7 +229,10 @@ bool checkDistanceRequest(){
   }
   http.addHeader("apikey", SUPABASE_KEY);
 
+  unsigned long t = millis();
   int code = http.GET();
+  Serial.printf("[REQ] GET -> %d em %lu ms\n", code, millis() - t);
+
   String payload = (code == 200) ? http.getString() : "";
   http.end();
 
@@ -150,6 +246,9 @@ bool checkDistanceRequest(){
 // Responde a todos os pedidos pendentes com a distância indicada (em cm).
 // Devolve true se o servidor aceitou (HTTP 204).
 bool sendDistance(float d){
+
+  connect_wifi();
+
   if (WiFi.status() != WL_CONNECTED) return false;
 
   WiFiClientSecure client;
@@ -168,8 +267,10 @@ bool sendDistance(float d){
   // A hora da resposta (answered_at) é preenchida pelo servidor
   String body = "{\"distance_cm\":" + String(d, 1) + "}";
 
+  unsigned long t = millis();
   int code = http.PATCH(body);
-  Serial.printf("[REQ] PATCH %s -> %d\n", body.c_str(), code);
+
+  Serial.printf("[REQ] PATCH %s -> %d em %lu ms\n", body.c_str(), code, millis() - t);
 
   if (code != 204) Serial.println(http.getString());
   http.end();
@@ -180,20 +281,21 @@ bool sendDistance(float d){
 // DISTANCE ------------------------------------------------------------
 
 //Returns the average of the last 5 distance readings from the sensor 
-float compute_latest_distance(){
+float compute_latest_distance(int N_SAMPLES){
   float dist_sum = 0;
   int valid = 0;
   
   for (int i = 0; i < N_SAMPLES; i++){
     float latest_dist = sampleDistance();
-    if (latest_dist>= 20.0){
+    Serial.printf("raw: %.1f\n", latest_dist);
+    if (latest_dist >= 10.0){
       dist_sum += latest_dist;
       valid++;
     } 
     delay(50);
   }
 
-  if (valid == 0) return 999.0;
+  if (valid < floor(N_SAMPLES/2)) return -1.0;
   return dist_sum / valid;
 
 }
@@ -204,10 +306,12 @@ float sampleDistance(){
   digitalWrite(trigPin,LOW);
   delayMicroseconds(2);
   digitalWrite(trigPin,HIGH);
-  delayMicroseconds(15);
+  delayMicroseconds(20);
   digitalWrite(trigPin,LOW);    
 
   unsigned long elapsed_t = pulseIn(echoPin, HIGH, ECHO_TIMEOUT_US);
+
+  delayMicroseconds(20);
 
   if (elapsed_t == 0){
     return -1.0;
@@ -216,26 +320,32 @@ float sampleDistance(){
 
 }
 
-
 // SPOTS LOGIC -----------------
 
 void run_fsm_logic(float currDist){
 
-  spots_fsm.tis = millis() - spots_fsm.tes;
+  current_cycle_count++;
+  spots_fsm.cis = current_cycle_count - spots_fsm.ces;
 
-  int last_d_code = evalute_sensor_reading(currDist); 
+  last_d_code = evalute_sensor_reading(currDist); 
+
+  Serial.print("["); Serial.print(current_cycle_count); Serial.print("] ");
+  Serial.print("LAST state = ");
+  
 
   // 1. Update Transitions
   switch (spots_fsm.state)
   {
   case FSMState::INIT:
-    if (spots_fsm.tis >= 5000 && INIT_count_dist >= 10) {
+    Serial.print("INIT");
+    if (currDist > 20.0 && currDist < 400.0) {
       spots_fsm.new_state = FSMState::SWITCH;
-      candidate_d_code = evalute_sensor_reading(INIT_avg_dist);
+      candidate_d_code = evalute_sensor_reading(currDist);
     }
     break;
   
   case FSMState::IDLE:
+    Serial.print("IDLE");
     if (last_d_code != current_d_code) {
       spots_fsm.new_state = FSMState::PROBING; 
       candidate_d_code = last_d_code;
@@ -243,11 +353,13 @@ void run_fsm_logic(float currDist){
     break;
 
   case FSMState::PROBING:
+    Serial.print("PROBING");
     if (last_d_code != candidate_d_code) {spots_fsm.new_state = FSMState::IDLE;}
-    else if (spots_fsm.tis >= time_threshold_MS) {spots_fsm.new_state = FSMState::SWITCH;}
+    else if (spots_fsm.cis >= cycles_threshold_4switch) {spots_fsm.new_state = FSMState::SWITCH;}
     break;
 
   case FSMState::SWITCH:
+    Serial.print("SWITCH");
     spots_fsm.new_state = FSMState::IDLE;
     break;
   }
@@ -255,25 +367,25 @@ void run_fsm_logic(float currDist){
   // 2. State Transition
   set_state(spots_fsm, spots_fsm.new_state);
 
+  Serial.print(" | NEW State = ");
+
   // 3. Perform Actions
   switch (spots_fsm.state)
   {
   case FSMState::INIT:
-    current_d_code = -1;
-    if (last_d_code >= 0) {
-      INIT_count_dist ++;
-      INIT_avg_dist = (INIT_avg_dist * (INIT_count_dist - 1) + currDist) /  INIT_count_dist;  
-    }  
+    Serial.println("INIT");
     break;
   
   case FSMState::IDLE:
-    SEND_NEW_STATE = false;
+    Serial.println("IDLE");
     break;
 
   case FSMState::PROBING:
+    Serial.println("PROBING");
     break;
 
   case FSMState::SWITCH:
+    Serial.println("SWITCH");
     current_d_code = candidate_d_code; 
     update_spots_state(current_d_code);
     SEND_NEW_STATE = true;
@@ -322,38 +434,49 @@ void update_spots_state(int code){
 //--------------------------------
 void setup () {
 
+  WAKEUP_TIME = millis();
   Serial.begin(BAUDRATE);
   
+  Serial.println(">>> WAKING UP...");
+
   //pinMode(ledPin, OUTPUT);
   pinMode(trigPin, OUTPUT);           //Envia um impulso
   pinMode(echoPin, INPUT);            //Recebe o impulso refletido
   digitalWrite(trigPin, LOW);
 
-  connect_wifi();
+  // MAIN CODE RUNS BELOW (After that, the ESP32 will enter Deep Sleep Mode) ------------------
 
-}
+  int N_SAMPLES = 5;
 
-void loop () {
+  if (spots_fsm.state == FSMState::INIT){
+    N_SAMPLES = 10;    
+  }
 
-  if (millis() - lastRead >= READ_INTERVAL_MS){
-    currDistance = compute_latest_distance();
+  currDistance = compute_latest_distance(N_SAMPLES);
 
-    Serial.print("Current distance (cm): ");
-    Serial.println(currDistance);
-    
+  Serial.print("Current distance (cm): ");
+  Serial.println(currDistance);
+  
+  if (currDistance != -1){
     run_fsm_logic(currDistance);
-
-    lastRead = millis();
+  } else {
+    Serial.println("<!> ERRO NA LEITURA - FSM não executada <!>");
   }
 
   if (SEND_NEW_STATE && sendReading()){
     SEND_NEW_STATE = false;
   }
-
-  // Debug: responde aos pedidos de distância feitos no site
-  if (millis() - lastReqPoll >= REQ_POLL_INTERVAL_MS){
-    lastReqPoll = millis();
-    if (checkDistanceRequest()) sendDistance(currDistance);
+  
+  // Checks for distance requests every few cycles
+  if (current_cycle_count - LAST_REQ_SENT_CYCLE >= NO_SENT_CYCLE_THRESHOLD){
+    if (sendDistance(currDistance)) LAST_REQ_SENT_CYCLE = current_cycle_count;
   }
+  
+  go_to_deep_sleep();
+
+}
+
+void loop () {
+ 
 
 }

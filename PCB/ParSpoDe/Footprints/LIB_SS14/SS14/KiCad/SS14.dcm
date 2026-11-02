@@ -1,0 +1,9 @@
+EESchema-DOCLIB  Version 2.0
+#
+$CMP SS14
+D TAIWAN SEMICONDUCTOR - SS14 - SCHOTTKY RECTIFIER, 1A, 40V, DO-214AC
+K
+F https://www.taiwansemi.com/assets/uploads/datasheet/SS12%20SERIES_Q2102.pdf
+$ENDCMP
+#
+#End Doc Library

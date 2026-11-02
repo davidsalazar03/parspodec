@@ -1,0 +1,9 @@
+EESchema-DOCLIB  Version 2.0
+#
+$CMP CP2102N-A02-GQFN24
+D USB Interface IC USB to UART bridge - QFN24
+K
+F https://componentsearchengine.com/Datasheets/1/CP2102N-A02-GQFN24.pdf
+$ENDCMP
+#
+#End Doc Library

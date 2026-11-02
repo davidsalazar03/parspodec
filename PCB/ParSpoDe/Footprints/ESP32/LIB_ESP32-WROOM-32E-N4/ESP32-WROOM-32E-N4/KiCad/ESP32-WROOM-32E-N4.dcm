@@ -1,0 +1,9 @@
+EESchema-DOCLIB  Version 2.0
+#
+$CMP ESP32-WROOM-32E-N4
+D RX TXRX MOD WIFI TRACE ANT SMD
+K
+F https://www.espressif.com/sites/default/files/documentation/esp32-wroom-32e_esp32-wroom-32ue_datasheet_en.pdf
+$ENDCMP
+#
+#End Doc Library

@@ -1,0 +1,9 @@
+EESchema-DOCLIB  Version 2.0
+#
+$CMP TPS22918DBVR
+D 5.5V, 2A, 52m load switch with adjustable rise time and adjustable quick output discharge
+K
+F http://www.ti.com/lit/gpn/TPS22918
+$ENDCMP
+#
+#End Doc Library

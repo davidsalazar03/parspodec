@@ -1,2 +1,19 @@
 firmware/include/secrets.h
 firmware/.pio/
+
+# KiCad – ficheiros gerados / locais
+*-backups/
+.history/
+\#auto_saved_files\#
+_autosave-*
+fp-info-cache
+*.kicad_prl
+*.bak
+*.lck
+
+# Bibliotecas descarregadas: guardar só KiCad + modelos 3D
+PCB/ParSpoDe/Footprints/**
+!PCB/ParSpoDe/Footprints/**/
+!PCB/ParSpoDe/Footprints/**/3D/*.stp
+!PCB/ParSpoDe/Footprints/**/KiCad/*
+!PCB/ParSpoDe/Footprints/*.kicad_sym

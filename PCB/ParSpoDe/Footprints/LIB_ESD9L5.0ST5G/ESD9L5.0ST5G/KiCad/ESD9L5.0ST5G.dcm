@@ -1,0 +1,9 @@
+EESchema-DOCLIB  Version 2.0
+#
+$CMP ESD9L5.0ST5G
+D Transient Voltage Suppressors ESD Protection Diodes with UltraLow Capacitance
+K
+F https://www.onsemi.com/pub/Collateral/ESD9L-D.PDF
+$ENDCMP
+#
+#End Doc Library
