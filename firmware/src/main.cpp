@@ -7,7 +7,7 @@
 #include <esp_system.h>   // esp_reset_reason(), esp_random()
 #include <sys/time.h>     // gettimeofday(): relógio RTC, continua a contar durante o deep sleep
 
-#define DEEP_SLEEP_TIME 20   // in seconds
+#define DEEP_SLEEP_TIME 3   // in seconds
 
 // FSM LOGIC -----------------------
 
@@ -407,9 +407,15 @@ float sampleDistance(){
 
   delayMicroseconds(20);
 
+  //Serial.print("-> ELAPSED T = "); Serial.println(elapsed_t);
+
+  // When no target is within ~4m of the sensor, its echo returns 0.0us. The same happens if the sensor is occluded. 
+  // However, since this situation is unlikely to happen, we assume that a 0us elapsed time corresponds to the state
+  // where both spots are simultaneously empty.
   if (elapsed_t == 0){
-    return -1.0;
+    return 400.0;     
   }
+
   return (elapsed_t / 29.15) / 2;    // distance in cm
 
 }
