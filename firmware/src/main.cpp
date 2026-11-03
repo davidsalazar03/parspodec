@@ -4,6 +4,8 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
+#include <esp_system.h>   // esp_reset_reason(), esp_random()
+#include <sys/time.h>     // gettimeofday(): relógio RTC, continua a contar durante o deep sleep
 
 #define DEEP_SLEEP_TIME 20   // in seconds
 
@@ -26,13 +28,35 @@ RTC_DATA_ATTR unsigned int current_cycle_count = 0;
 //RTC_DATA_ATTR unsigned long lastRead = 0;       // Time of last reading
 //RTC_DATA_ATTR unsigned long lastReqPoll = 0;    // Time of last request pooling
 
-RTC_DATA_ATTR int current_d_code = -1;          // Current d-code (defines the spot's state)
+#define NO_DCODE -2   // "sem d-code": ainda não há estado (1.º estado depois de um arranque/reset)
+
+RTC_DATA_ATTR int current_d_code = NO_DCODE;    // Current d-code (defines the spot's state)
 RTC_DATA_ATTR int last_d_code = -1;             // Last d-code
 RTC_DATA_ATTR int candidate_d_code = -1;        // D-code candidate to switch with the current one
 
 RTC_DATA_ATTR unsigned int LAST_REQ_SENT_CYCLE = 0;
 
-RTC_DATA_ATTR bool SEND_NEW_STATE = false;  // True when the state of the spots changes and that info must be sent via WiFi
+// Fila de mudanças de estado por enviar. Se o envio falhar (Wi-Fi/internet em baixo),
+// as mudanças ficam aqui guardadas e são enviadas pela ordem certa quando a ligação voltar
+// (antes só se enviava o estado atual e as mudanças intermédias perdiam-se).
+typedef struct {
+  uint32_t seq;        // nº do evento nesta sessão (sessão = desde o último arranque/reset)
+  int8_t   prev_code;  // d-code anterior (NO_DCODE = 1.º estado depois de um arranque)
+  int8_t   new_code;   // d-code novo
+  int16_t  rst;        // motivo do reset (esp_reset_reason) — 8 = acordou do deep sleep (normal)
+  uint16_t fails;      // tentativas de envio falhadas
+  uint32_t cycle;      // ciclo em que a mudança foi confirmada
+  int64_t  t_s;        // instante da confirmação (s, relógio RTC) — para calcular o atraso do envio
+} state_event_t;
+
+const int EVQ_SIZE = 16;
+RTC_DATA_ATTR state_event_t evq[EVQ_SIZE];
+RTC_DATA_ATTR int evq_head  = 0;    // índice do evento mais antigo
+RTC_DATA_ATTR int evq_count = 0;    // nº de eventos por enviar
+
+RTC_DATA_ATTR uint32_t boot_id     = 0;    // nº aleatório gerado em cada arranque/reset (identifica a sessão)
+RTC_DATA_ATTR uint32_t event_seq   = 0;    // contador de eventos nesta sessão
+RTC_DATA_ATTR int      boot_reason = -1;   // motivo do último arranque/reset
 
 // Spots codes: -1 -> unkown; 0 -> empty; 1 -> taken;
 RTC_DATA_ATTR int L1 = -1;
@@ -175,9 +199,49 @@ void connect_wifi(){
 
 }
 
-// Envia o estado atual de L1 e L2 para o Supabase (tabela spot_states).
-// Devolve true se o servidor confirmou a gravação (HTTP 201).
-bool sendReading(){
+// SPOTS STATE → SUPABASE -----------------------------------------------
+
+// Converte um d-code nos estados de L1 e L2 (-1 desconhecido, 0 livre, 1 ocupado)
+void dcode_to_spots(int code, int& l1, int& l2){
+  switch (code){
+    case 0:  l1 = 1;  l2 = -1; break;
+    case 1:  l1 = 0;  l2 = 1;  break;
+    case 2:  l1 = 0;  l2 = 0;  break;
+    default: l1 = -1; l2 = -1; break;
+  }
+}
+
+// Segundos desde o arranque, contados pelo relógio RTC (não pára durante o deep sleep)
+int64_t now_s(){
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  return (int64_t)tv.tv_sec;
+}
+
+// Guarda uma mudança de estado na fila para ser enviada
+void push_event(int prev_code, int new_code){
+  if (evq_count == EVQ_SIZE){   // fila cheia: descarta a mais antiga
+    evq_head = (evq_head + 1) % EVQ_SIZE;
+    evq_count--;
+    Serial.println("[EVQ] Fila cheia: evento mais antigo descartado");
+  }
+  state_event_t& e = evq[(evq_head + evq_count) % EVQ_SIZE];
+  e.seq       = ++event_seq;
+  e.prev_code = prev_code;
+  e.new_code  = new_code;
+  e.rst       = (prev_code == NO_DCODE) ? boot_reason : (int)esp_reset_reason();
+  e.fails     = 0;
+  e.cycle     = current_cycle_count;
+  e.t_s       = now_s();
+  evq_count++;
+  Serial.printf("[EVQ] Novo evento #%u: d-code %d -> %d (%d na fila)\n",
+                (unsigned)e.seq, prev_code, new_code, evq_count);
+}
+
+// Envia UMA mudança de estado para o Supabase (tabela spot_states).
+// Devolve true se o servidor a gravou (201) ou se já a tinha gravado antes
+// (409 = duplicado: o envio anterior chegou ao servidor mas a resposta perdeu-se).
+bool sendEvent(const state_event_t& e){
   connect_wifi();
   if(WiFi.status() != WL_CONNECTED) return false;
 
@@ -194,8 +258,22 @@ bool sendReading(){
   http.addHeader("Content-Type", "application/json");
   http.addHeader("Prefer", "return=minimal");
 
-  // Um único objeto JSON, com os nomes das colunas em minúsculas: {"l1":1,"l2":-1}
-  String body = "{\"l1\":" + String(L1) + ",\"l2\":" + String(L2) + "}";
+  int l1, l2;
+  dcode_to_spots(e.new_code, l1, l2);
+  long age = (long)(now_s() - e.t_s);
+  if (age < 0) age = 0;
+
+  // Um único objeto JSON, com os nomes das colunas em minúsculas
+  // (os casts para int evitam que int8_t seja convertido num carácter)
+  String body = "{\"l1\":" + String(l1) + ",\"l2\":" + String(l2)
+    + ",\"prev_dcode\":"   + (e.prev_code == NO_DCODE ? String("null") : String((int)e.prev_code))
+    + ",\"new_dcode\":"    + String((int)e.new_code)
+    + ",\"reset_reason\":" + String((int)e.rst)
+    + ",\"cycle\":"        + String((unsigned long)e.cycle)
+    + ",\"send_fails\":"   + String((unsigned int)e.fails)
+    + ",\"age_s\":"        + String(age)
+    + ",\"boot_id\":"      + String((unsigned long)boot_id)
+    + ",\"seq\":"          + String((unsigned long)e.seq) + "}";
 
   int code = http.POST(body);
   Serial.printf("POST %s -> %d\n", body.c_str(), code);
@@ -203,7 +281,23 @@ bool sendReading(){
   if (code != 201) Serial.println(http.getString());
   http.end();
 
-  return code == 201;
+  return code == 201 || code == 409;
+}
+
+// Envia todas as mudanças pendentes, pela ordem em que aconteceram.
+// Pára no 1.º envio que falhar (volta a tentar no próximo ciclo).
+void flush_events(){
+  while (evq_count > 0){
+    state_event_t& e = evq[evq_head];
+    if (!sendEvent(e)){
+      e.fails++;
+      Serial.printf("[EVQ] Envio do evento #%u falhou (%u falhas, %d na fila)\n",
+                    (unsigned)e.seq, (unsigned)e.fails, evq_count);
+      return;
+    }
+    evq_head = (evq_head + 1) % EVQ_SIZE;
+    evq_count--;
+  }
 }
 
 // DEBUG: PEDIDOS DE DISTÂNCIA (vindos do site) -----------------------
@@ -386,9 +480,9 @@ void run_fsm_logic(float currDist){
 
   case FSMState::SWITCH:
     Serial.println("SWITCH");
+    push_event(current_d_code, candidate_d_code);   // guarda a mudança (d-code anterior -> novo) para enviar
     current_d_code = candidate_d_code; 
     update_spots_state(current_d_code);
-    SEND_NEW_STATE = true;
     break;
 
   }
@@ -407,27 +501,7 @@ int evalute_sensor_reading(float d){
 
 // Actually change the spot's state variables
 void update_spots_state(int code){   
-
-  switch (code)
-  {
-    case -1:
-      L1 = -1; L2 = -1;
-      break;
-    
-    case 0:
-      L1 = 1; L2 = -1;
-      break;
-    
-    case 1:
-      L1 = 0; L2 = 1;
-      break;
-
-    case 2:
-      L1 = 0; L2 = 0;
-      break;
-
-  }
-
+  dcode_to_spots(code, L1, L2);
 }
 
 
@@ -438,6 +512,15 @@ void setup () {
   Serial.begin(BAUDRATE);
   
   Serial.println(">>> WAKING UP...");
+
+  // Arranque "a sério" (energia, brownout, crash, watchdog, upload...) e não um acordar do deep sleep:
+  // as variáveis RTC_DATA_ATTR voltaram aos valores iniciais → nova sessão
+  esp_reset_reason_t rst = esp_reset_reason();
+  if (rst != ESP_RST_DEEPSLEEP){
+    boot_reason = (int)rst;
+    boot_id = esp_random();
+    Serial.printf(">>> ARRANQUE: reset_reason = %d, boot_id = %u\n", boot_reason, (unsigned)boot_id);
+  }
 
   //pinMode(ledPin, OUTPUT);
   pinMode(trigPin, OUTPUT);           //Envia um impulso
@@ -463,9 +546,8 @@ void setup () {
     Serial.println("<!> ERRO NA LEITURA - FSM não executada <!>");
   }
 
-  if (SEND_NEW_STATE && sendReading()){
-    SEND_NEW_STATE = false;
-  }
+  // Envia as mudanças de estado pendentes (se houver)
+  flush_events();
   
   // Checks for distance requests every few cycles
   if (current_cycle_count - LAST_REQ_SENT_CYCLE >= NO_SENT_CYCLE_THRESHOLD){
