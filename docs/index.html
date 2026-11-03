@@ -12,7 +12,7 @@
     --free:#15803d;  --free-bg:#dcfce7;
     --taken:#b91c1c; --taken-bg:#fee2e2;
     --unk:#4b5563;   --unk-bg:#eef0f3;
-    --warn:#b45309;
+    --warn:#b45309;  --warn-bg:#fef3c7;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -21,7 +21,7 @@
       --free:#4ade80;  --free-bg:#10291a;
       --taken:#f87171; --taken-bg:#331617;
       --unk:#a1a7b0;   --unk-bg:#22262d;
-      --warn:#fbbf24;
+      --warn:#fbbf24;  --warn-bg:#33260b;
     }
   }
   * { box-sizing: border-box; }
@@ -79,6 +79,25 @@
   .scroll { overflow-x:auto; }
   .scroll th, .scroll td { padding:8px 4px; }
   .scroll td .b { white-space:nowrap; }
+
+  /* Modo debug */
+  .b[data-s="warn"] { background:var(--warn-bg); color:var(--warn); }
+  .cardhead { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:10px; }
+  .cardhead h2 { margin:0; }
+  .toggle { display:inline-flex; align-items:center; gap:8px; font-size:.85rem; color:var(--muted);
+            cursor:pointer; user-select:none; white-space:nowrap; }
+  .toggle input { appearance:none; -webkit-appearance:none; width:34px; height:20px; margin:0; border-radius:999px;
+                  background:var(--line); position:relative; cursor:pointer; transition:background .15s; flex:none; }
+  .toggle input::after { content:""; position:absolute; top:2px; left:2px; width:16px; height:16px; border-radius:50%;
+                         background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.25); transition:transform .15s; }
+  .toggle input:checked { background:var(--accent); }
+  .toggle input:checked::after { transform:translateX(14px); }
+  .toggle input:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .dbg { display:none; }
+  body.debug main { max-width: 1000px; }
+  body.debug .dbg { display:revert; }
+  th.dbg, td.dbg { font-size:.8rem; white-space:nowrap; }
+  .legend { font-size:.8rem; color:var(--muted); margin-top:12px; line-height:1.55; }
 </style>
 </head>
 <body>
@@ -109,15 +128,30 @@
     </section>
 
     <section class="card">
-      <h2>Histórico de mudanças</h2>
-      <table>
-        <thead><tr><th>Quando</th><th>Lugar 1</th><th>Lugar 2</th></tr></thead>
-        <tbody id="hist"></tbody>
-      </table>
+      <div class="cardhead">
+        <h2>Histórico de mudanças</h2>
+        <label class="toggle"><input type="checkbox" id="dbgToggle" role="switch"> Modo debug</label>
+      </div>
+      <div class="scroll">
+        <table>
+          <thead><tr>
+            <th>Quando</th><th>Lugar 1</th><th>Lugar 2</th>
+            <th class="dbg">d-code</th><th class="dbg">Reset</th><th class="dbg">Sessão · evento · ciclo</th>
+            <th class="dbg">Envio</th><th class="dbg">Diagnóstico</th>
+          </tr></thead>
+          <tbody id="hist"></tbody>
+        </table>
+      </div>
       <div class="empty" id="histEmpty" hidden>Ainda sem dados.</div>
+      <div class="legend dbg">
+        <b>d-code</b>: −1 = &lt; 120 cm (perto demais) · 0 = L1 ocupado · 1 = L1 livre, L2 ocupado · 2 = ambos livres · ∅ = sem estado anterior (arranque).<br>
+        <b>Reset</b>: 8 = acordou do deep sleep (normal) · 1 = falta de energia · 9 = brownout (tensão baixa) · 4–7 = crash/watchdog · 3 = software · 2 = botão EN.<br>
+        <b>Sessão</b>: muda sempre que a ESP32 reinicia. <b>Envio</b>: tentativas falhadas e atraso entre a confirmação da mudança e a gravação (a hora mostrada já desconta o atraso).<br>
+        Linhas sem dados técnicos vêm do firmware antigo.
+      </div>
     </section>
 
-    <p id="note">O sensor só envia dados quando o estado de um lugar muda (e se mantém durante 30 s).</p>
+    <p id="note">O sensor só envia dados quando o estado de um lugar muda (e se mantém durante 60 s).</p>
   </div>
 
   <!-- ABA: DISTÂNCIA -->
@@ -161,6 +195,7 @@ const REQ_SHOW      = 20;
 const $ = id => document.getElementById(id);
 let sb;
 let rows = [];     // spot_states, mais recente primeiro
+let loaded = false; // já chegaram os dados do Supabase?
 let reqs = [];     // distance_requests, mais recente primeiro
 let pendingId = null, pendingSince = 0, pendingTimer = null;
 
@@ -178,6 +213,9 @@ window.addEventListener("hashchange", showTab);
 showTab();
 
 // ---------- Utilitários ----------
+// Hora real da mudança: created_at é a hora da gravação; age_s é o atraso do envio
+const eventTime = r => new Date(new Date(r.created_at).getTime() - (r.age_s || 0) * 1000);
+
 const fmtTime = t => t.toLocaleString("pt-PT", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 // Hora com segundos; só mostra o dia se não for hoje
 const fmtTimeSec = t => {
@@ -216,13 +254,13 @@ function describe(spot, row) {
 // Desde quando é que este lugar está no estado atual (procura para trás no histórico)
 function since(spot) {
   const cur = describe(spot, rows[0]);
-  let t = rows[0].created_at;
+  let t = eventTime(rows[0]);
   for (const r of rows) {
     const d = describe(spot, r);
     if (d.s !== cur.s || d.text !== cur.text) break;
-    t = r.created_at;
+    t = eventTime(r);
   }
-  return new Date(t);
+  return t;
 }
 
 function renderSpot(spot) {
@@ -246,18 +284,86 @@ function renderSpot(spot) {
   sub.append("desde " + fmtTime(t) + " (" + ago(t) + ")");
 }
 
+// ---------- Modo debug ----------
+const RST_NAMES = { 0: "desconhecido", 1: "energia", 2: "botão EN", 3: "software", 4: "crash", 5: "watchdog",
+                    6: "watchdog", 7: "watchdog", 8: "deep sleep", 9: "brownout", 10: "SDIO" };
+const DCODE_NAMES = { "-1": "< 120 cm (perto demais)", "0": "L1 ocupado", "1": "L1 livre, L2 ocupado", "2": "ambos livres" };
+const hasDbg  = r => r.new_dcode !== null && r.new_dcode !== undefined;
+const fmtCode = c => c === null || c === undefined ? "∅" : String(c).replace("-", "−");
+const rstName = c => RST_NAMES[c] ?? "código " + c;
+const hex4    = n => (Number(n) >>> 0).toString(16).padStart(8, "0").slice(-4);
+
+// Classifica a mudança: genuína, arranque, atrasada ou repetida
+function diagnose(r, older) {
+  const same = older && older.l1 === r.l1 && older.l2 === r.l2;
+  if (!hasDbg(r)) {
+    return same ? { s: "taken", text: "Repetida", title: "Igual à linha anterior (firmware antigo, sem dados técnicos)" }
+                : { s: "unk",   text: "Sem dados", title: "Linha do firmware antigo" };
+  }
+  if (r.prev_dcode === null)
+    return { s: "warn", text: same ? "Arranque (repete)" : "Arranque",
+             title: "1.º estado depois de a ESP32 reiniciar (" + rstName(r.reset_reason) + ")" };
+  if (r.prev_dcode === r.new_dcode || same)
+    return { s: "taken", text: "Repetida (bug)", title: "O estado novo é igual ao anterior" };
+  if (r.send_fails > 0)
+    return { s: "warn", text: "Atrasada", title: "Mudança real, mas o envio falhou " + r.send_fails + "×" };
+  return { s: "free", text: "Genuína" };
+}
+
+function dbgCell(content, cls = "") {
+  const td = document.createElement("td");
+  td.className = "dbg " + cls;
+  if (content instanceof Node) td.append(content); else td.textContent = content;
+  return td;
+}
+
+let debugMode = false;
+try { debugMode = localStorage.getItem("parspodec-debug") === "1"; } catch (e) {}
+
+function applyDebug() {
+  document.body.classList.toggle("debug", debugMode);
+  $("dbgToggle").checked = debugMode;
+  if (loaded) renderHistory();
+}
+$("dbgToggle").addEventListener("change", e => {
+  debugMode = e.target.checked;
+  try { localStorage.setItem("parspodec-debug", debugMode ? "1" : "0"); } catch (err) {}
+  applyDebug();
+});
+
 function renderHistory() {
   const tb = $("hist");
   tb.replaceChildren();
   $("histEmpty").hidden = rows.length > 0;
-  for (const r of rows.slice(0, HISTORY_SHOW)) {
+  rows.slice(0, HISTORY_SHOW).forEach((r, i) => {
     const tr = document.createElement("tr");
-    const t = document.createElement("td"); t.className = "t"; t.textContent = fmtTime(new Date(r.created_at));
+    const when = eventTime(r);
+    const t = document.createElement("td"); t.className = "t";
+    t.textContent = debugMode ? fmtTimeSec(when) : fmtTime(when);
+    if (debugMode && r.age_s) t.title = "Gravado às " + fmtTimeSec(new Date(r.created_at));
     const a = document.createElement("td"); a.append(mkBadge(describe("l1", r)));
     const b = document.createElement("td"); b.append(mkBadge(describe("l2", r)));
     tr.append(t, a, b);
+
+    // Colunas de debug (escondidas fora do modo debug)
+    if (hasDbg(r)) {
+      const dc = dbgCell(fmtCode(r.prev_dcode) + " → " + fmtCode(r.new_dcode), "n");
+      dc.title = (r.prev_dcode === null ? "sem estado anterior" : DCODE_NAMES[r.prev_dcode]) + " → " + DCODE_NAMES[r.new_dcode];
+      const rs = dbgCell(r.reset_reason + " · " + rstName(r.reset_reason), r.reset_reason === 8 ? "muted" : "");
+      const se = dbgCell(hex4(r.boot_id) + " · #" + r.seq + " · c" + r.cycle, "n muted");
+      se.title = "boot_id " + r.boot_id;
+      const en = dbgCell((r.send_fails ? r.send_fails + " falha" + (r.send_fails > 1 ? "s" : "") : "à 1.ª")
+                         + " · +" + (r.age_s ?? 0) + " s", "n" + (r.send_fails ? "" : " muted"));
+      tr.append(dc, rs, se, en);
+    } else {
+      for (let k = 0; k < 4; k++) tr.append(dbgCell("—", "muted"));
+    }
+    const dg = diagnose(r, rows[i + 1]);
+    const badge = mkBadge(dg);
+    if (dg.title) badge.title = dg.title;
+    tr.append(dbgCell(badge));
     tb.append(tr);
-  }
+  });
 }
 
 function renderSpots() { renderSpot("l1"); renderSpot("l2"); renderHistory(); }
@@ -359,6 +465,8 @@ async function requestDistance() {
 $("reqBtn").addEventListener("click", requestDistance);
 
 // ---------- Arranque ----------
+applyDebug();
+
 async function init() {
   if (typeof supabase === "undefined") {
     $("status").textContent = "Erro a carregar a biblioteca";
@@ -367,7 +475,7 @@ async function init() {
   sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
   const [spotsRes, reqRes] = await Promise.all([
-    sb.from(TABLE).select("l1, l2, created_at").order("created_at", { ascending: false }).limit(HISTORY_FETCH),
+    sb.from(TABLE).select("*").order("id", { ascending: false }).limit(HISTORY_FETCH),
     sb.from(REQ_TABLE).select("id, requested_at, answered_at, distance_cm").order("id", { ascending: false }).limit(50),
   ]);
 
@@ -375,6 +483,7 @@ async function init() {
     $("status").textContent = "Erro: " + spotsRes.error.message;
   } else {
     rows = spotsRes.data;
+    loaded = true;
     renderSpots();
   }
 
