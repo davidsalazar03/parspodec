@@ -7,7 +7,7 @@
 #include <esp_system.h>   // esp_reset_reason(), esp_random()
 #include <sys/time.h>     // gettimeofday(): relógio RTC, continua a contar durante o deep sleep
 
-#define DEEP_SLEEP_TIME 3   // in seconds
+#define DEEP_SLEEP_TIME 20   // in seconds
 
 // FSM LOGIC -----------------------
 
